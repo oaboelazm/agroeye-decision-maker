@@ -1,0 +1,11 @@
+﻿{
+  "timestamp_utc": "2026-03-03T21:20:00Z",
+  "actions": {
+    "temperature": {"mode": "cool", "target_c": 20.630300388768134},
+    "irrigation": {"on": true, "duration_s": 83, "flow_lph": 27.771086375513292},
+    "ventilation": {"fan_speed_pct": 46.07696052395662, "vent_open_pct": 71.15580415967779},
+    "humidity": {"mode": "hold", "target_rh_pct": 56.018160462298965}
+  },
+  "rationale": "Decision from mpc controller using key readings: soil_humidity=32.0, air_temperature=24.0, air_humidity=58.0, co2_ppm=700.",
+  "safety": {"clamped": false, "violations": []}
+}

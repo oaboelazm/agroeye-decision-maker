@@ -1,0 +1,16 @@
+﻿{
+  "timestamp_utc": "2026-03-03T21:20:00Z",
+  "sensors": {
+    "soil_n": 20,
+    "soil_p": 10,
+    "soil_k": 30,
+    "soil_temperature": 20.5,
+    "soil_humidity": 32.0,
+    "soil_ph": 6.2,
+    "soil_ec": 2.1,
+    "air_temperature": 24.0,
+    "air_humidity": 58.0,
+    "light_lux": 15000,
+    "co2_ppm": 700
+  }
+}

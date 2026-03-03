@@ -1,0 +1,35 @@
+﻿limits:
+  air_temperature_c: [16.0, 32.0]
+  soil_temperature_c: [14.0, 30.0]
+  air_humidity_pct: [45.0, 90.0]
+  soil_humidity_pct: [20.0, 75.0]
+  soil_ec_ms_cm: [0.8, 5.5]
+  soil_ph: [5.0, 7.5]
+
+actions:
+  temperature_target_c: [16.0, 30.0]
+  humidity_target_rh_pct: [50.0, 90.0]
+  fan_speed_pct: [0, 100]
+  vent_open_pct: [0, 100]
+  irrigation_duration_s: [0, 120]
+  irrigation_flow_lph: [20, 200]
+
+irrigation:
+  max_duration_per_hour_s: 300
+  max_duration_per_day_s: 2400
+  min_off_time_steps: 2
+  dryness_trigger_pct: 28.0
+  emergency_pulse_s: 10
+  emergency_flow_lph: 80
+
+ramp_limits:
+  temperature_target_delta_per_step: 2.0
+  humidity_target_delta_per_step: 5.0
+  fan_delta_per_step: 30
+  vent_delta_per_step: 30
+
+fallback:
+  hold_temp_c: 22.0
+  hold_rh_pct: 75.0
+  min_vent_pct: 10
+  min_fan_pct: 15
