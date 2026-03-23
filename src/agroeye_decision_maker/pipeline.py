@@ -110,9 +110,15 @@ def _evaluate_predictors(bundle: PredictorBundle, x: np.ndarray, y: dict[str, np
     preds = bundle.predict(x)
     metrics = {}
     for k, yt in y.items():
-        yp = preds[k]
-        metrics[f"{k}_mae"] = float(mean_absolute_error(yt, yp))
-        metrics[f"{k}_r2"] = float(r2_score(yt, yp))
+        yp = np.asarray(preds[k], dtype=float)
+        yt_arr = np.asarray(yt, dtype=float)
+        mask = np.isfinite(yt_arr) & np.isfinite(yp)
+        if int(mask.sum()) < 2:
+            metrics[f"{k}_mae"] = float("nan")
+            metrics[f"{k}_r2"] = float("nan")
+            continue
+        metrics[f"{k}_mae"] = float(mean_absolute_error(yt_arr[mask], yp[mask]))
+        metrics[f"{k}_r2"] = float(r2_score(yt_arr[mask], yp[mask]))
     return metrics
 
 
@@ -216,9 +222,13 @@ def run_training(cfg: dict[str, Any], safety_cfg: dict[str, Any]) -> TrainArtifa
     x_val = transform_with_store(val_df, store)
     x_test = transform_with_store(test_df, store)
 
-    y_train_actions = train_df[ACTION_TARGETS].values
-    y_val_actions = val_df[ACTION_TARGETS].values
-    y_test_actions = test_df[ACTION_TARGETS].values
+    y_train_actions_df = train_df[ACTION_TARGETS].copy()
+    y_val_actions_df = val_df[ACTION_TARGETS].copy()
+    y_test_actions_df = test_df[ACTION_TARGETS].copy()
+    action_medians = y_train_actions_df.median(numeric_only=True)
+    y_train_actions = y_train_actions_df.fillna(action_medians).values
+    y_val_actions = y_val_actions_df.fillna(action_medians).values
+    y_test_actions = y_test_actions_df.fillna(action_medians).values
 
     mode = str(cfg["training"].get("controller_mode", "imitation"))
 

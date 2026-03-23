@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+import pandas as pd
+
 
 @dataclass
 class SafetyState:
@@ -13,6 +15,8 @@ class SafetyState:
     steps_since_irrigation: int = 999
     irrigation_hour_accum: float = 0.0
     irrigation_day_accum: float = 0.0
+    last_hour_key: str | None = None
+    last_day_key: str | None = None
 
 
 @dataclass
@@ -35,13 +39,55 @@ class SafetyGuard:
             "humidity": {"mode": "hold", "target_rh_pct": float(fb["hold_rh_pct"])},
         }
 
-    def apply(self, action: dict[str, Any], sensors: dict[str, float]) -> tuple[dict[str, Any], bool, list[str]]:
+    def _roll_irrigation_counters(self, timestamp_utc: str | None) -> None:
+        if not timestamp_utc:
+            return
+        try:
+            ts = pd.Timestamp(timestamp_utc)
+        except Exception:
+            return
+
+        hour_key = ts.strftime("%Y-%m-%d-%H")
+        day_key = ts.strftime("%Y-%m-%d")
+
+        if self.state.last_hour_key is None:
+            self.state.last_hour_key = hour_key
+        if self.state.last_day_key is None:
+            self.state.last_day_key = day_key
+
+        if self.state.last_hour_key != hour_key:
+            self.state.irrigation_hour_accum = 0.0
+            self.state.last_hour_key = hour_key
+        if self.state.last_day_key != day_key:
+            self.state.irrigation_day_accum = 0.0
+            self.state.last_day_key = day_key
+
+    def apply(self, action: dict[str, Any], sensors: dict[str, float], timestamp_utc: str | None = None) -> tuple[dict[str, Any], bool, list[str]]:
         out = {k: dict(v) if isinstance(v, dict) else v for k, v in action.items()}
         violations: list[str] = []
+
+        self._roll_irrigation_counters(timestamp_utc)
 
         a_cfg = self.cfg["actions"]
         r_cfg = self.cfg["ramp_limits"]
         i_cfg = self.cfg["irrigation"]
+        lim_cfg = self.cfg.get("limits", {})
+
+        sensor_limit_map = {
+            "air_temperature": "air_temperature_c",
+            "soil_temperature": "soil_temperature_c",
+            "air_humidity": "air_humidity_pct",
+            "soil_humidity": "soil_humidity_pct",
+            "soil_ec": "soil_ec_ms_cm",
+            "soil_ph": "soil_ph",
+        }
+        for sensor_key, lim_key in sensor_limit_map.items():
+            if sensor_key not in sensors or sensors[sensor_key] is None or lim_key not in lim_cfg:
+                continue
+            lo, hi = lim_cfg[lim_key]
+            v = float(sensors[sensor_key])
+            if v < float(lo) or v > float(hi):
+                violations.append(f"sensor_out_of_range:{sensor_key}")
 
         # Clamp targets.
         t = self._clamp(float(out["temperature"]["target_c"]), *a_cfg["temperature_target_c"])

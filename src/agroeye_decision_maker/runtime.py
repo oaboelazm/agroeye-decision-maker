@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from collections import deque
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,22 @@ class DecisionRuntime:
 
         self.history = deque(maxlen=100)
         self.last_sensor = {}
+
+    def _merge_overrides(self, overrides: dict[str, Any] | None) -> dict[str, Any]:
+        if not overrides:
+            return self.cfg
+
+        merged = deepcopy(self.cfg)
+
+        def _deep_update(dst: dict[str, Any], src: dict[str, Any]) -> None:
+            for k, v in src.items():
+                if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                    _deep_update(dst[k], v)
+                else:
+                    dst[k] = v
+
+        _deep_update(merged, overrides)
+        return merged
 
     def _row_from_sensors(self, sensors: dict[str, Any], timestamp_utc: str) -> pd.DataFrame:
         row = {c: self.feature_store.medians.get(c, 0.0) for c in self.feature_store.feature_names}
@@ -93,25 +110,35 @@ class DecisionRuntime:
         return float(np.nanpercentile(scores, 90))
 
     def _detect_anomaly(self, sensors: dict[str, Any]) -> bool:
-        if len(self.history) < 2:
+        if len(self.history) < 1:
             return False
         prev = self.history[-1]
         jump_sigma = float(self.cfg["inference"]["anomaly"].get("jump_sigma", 5.0))
 
         jump_count = 0
         for k in ["air_temperature", "air_humidity", "soil_humidity", "co2_ppm"]:
-            if k in sensors and k in prev and sensors[k] is not None and prev[k] is not None:
-                if abs(float(sensors[k]) - float(prev[k])) > jump_sigma * 5:
+            cur_v = sensors.get(k)
+            prev_v = prev.get(k)
+            if cur_v is not None and prev_v is not None:
+                if abs(float(cur_v) - float(prev_v)) > jump_sigma * 5:
                     jump_count += 1
 
         flatline_steps = int(self.cfg["inference"]["anomaly"].get("flatline_steps", 6))
         is_flat = False
-        if len(self.history) >= flatline_steps:
+        if len(self.history) >= flatline_steps - 1:
             same = 0
-            for p in list(self.history)[-flatline_steps:]:
-                if all(abs(float(p.get(k, 0)) - float(prev.get(k, 0))) < 1e-9 for k in ["air_temperature", "air_humidity", "soil_humidity", "co2_ppm"]):
+            recent = list(self.history)[-(flatline_steps - 1):]
+            for p in recent:
+                all_same = True
+                for k in ["air_temperature", "air_humidity", "soil_humidity", "co2_ppm"]:
+                    cur_v = sensors.get(k)
+                    hist_v = p.get(k)
+                    if cur_v is None or hist_v is None or abs(float(hist_v) - float(cur_v)) >= 1e-9:
+                        all_same = False
+                        break
+                if all_same:
                     same += 1
-            is_flat = same == flatline_steps
+            is_flat = same == (flatline_steps - 1)
 
         return jump_count >= 2 or is_flat
 
@@ -125,28 +152,56 @@ class DecisionRuntime:
                 "flow_lph": float(self.safety_guard.cfg["irrigation"]["emergency_flow_lph"]),
             }
         safe_action, clamped, violations = self.safety_guard.apply(action, sensors)
+        quality_pct = self._decision_quality_pct(
+            clamped=bool(clamped),
+            violations=violations,
+            used_fallback=True,
+            ood=True,
+            anomaly=("anomaly" in reason.lower()),
+        )
         return {
             "timestamp_utc": ts,
             "actions": safe_action,
             "rationale": f"Fallback safe hold mode triggered: {reason}." + (" Dry soil pulse applied." if dry else ""),
             "safety": {"clamped": clamped, "violations": violations},
+            "quality_score_pct": quality_pct,
         }
+
+    def _decision_quality_pct(
+        self,
+        clamped: bool,
+        violations: list[str],
+        used_fallback: bool,
+        ood: bool,
+        anomaly: bool,
+    ) -> float:
+        # Practical management-facing score (0-100) for runtime decision reliability.
+        score = 92.0
+        if used_fallback:
+            score -= 35.0
+        if ood:
+            score -= 15.0
+        if anomaly:
+            score -= 20.0
+        if clamped:
+            score -= 10.0
+        score -= min(20.0, 3.0 * float(len(violations)))
+        return float(max(0.0, min(100.0, score)))
 
     def decide(self, timestamp_utc: str | None, sensors: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         ts = timestamp_utc or datetime.now(timezone.utc).isoformat()
-
-        # Save history for anomaly detection and carry-forward.
-        self.history.append(dict(sensors))
+        effective_cfg = self._merge_overrides(overrides)
 
         anomaly = self._detect_anomaly(sensors)
         row = self._row_from_sensors(sensors, ts)
         x = self.feature_store.scaler.transform(self.feature_store.imputer.transform(row[self.feature_store.feature_names]))
 
-        ood_threshold = float(self.cfg["inference"]["confidence"].get("ood_zscore_threshold", 4.0))
+        ood_threshold = float(effective_cfg["inference"]["confidence"].get("ood_zscore_threshold", 4.0))
         ood = self._ood_score(row) > ood_threshold
 
         if anomaly or ood:
             reason = "sensor anomaly" if anomaly else "low confidence / out-of-distribution"
+            self.history.append(dict(sensors))
             return self._fallback_reasoned(ts, sensors, reason)
 
         if self.mode == "imitation" and self.imitation is not None:
@@ -164,11 +219,13 @@ class DecisionRuntime:
             }
         elif self.mpc is not None:
             raw = np.array([[float(row.iloc[0].get("air_temperature", 22.0)), float(row.iloc[0].get("air_humidity", 75.0))]])
-            action = self.mpc.decide(x, raw)
+            mpc_runtime = MPCController(self.predictors, effective_cfg)
+            action = mpc_runtime.decide(x, raw)
         else:
+            self.history.append(dict(sensors))
             return self._fallback_reasoned(ts, sensors, "model artifact missing")
 
-        safe_action, clamped, violations = self.safety_guard.apply(action, sensors)
+        safe_action, clamped, violations = self.safety_guard.apply(action, sensors, ts)
 
         rationale_bits = []
         if sensors.get("soil_humidity") is not None:
@@ -186,10 +243,20 @@ class DecisionRuntime:
         for k, v in row.iloc[0].to_dict().items():
             if isinstance(v, (int, float, np.number)) and not pd.isna(v):
                 self.last_sensor[k] = float(v)
+        self.history.append(dict(sensors))
+
+        quality_pct = self._decision_quality_pct(
+            clamped=bool(clamped),
+            violations=violations,
+            used_fallback=False,
+            ood=bool(ood),
+            anomaly=bool(anomaly),
+        )
 
         return {
             "timestamp_utc": ts,
             "actions": safe_action,
             "rationale": rationale,
             "safety": {"clamped": bool(clamped), "violations": violations},
+            "quality_score_pct": quality_pct,
         }

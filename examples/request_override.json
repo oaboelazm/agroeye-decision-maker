@@ -1,0 +1,16 @@
+﻿{
+  "timestamp_utc": "2026-03-05T10:00:00Z",
+  "sensors": {
+    "soil_humidity": 40,
+    "air_temperature": 23,
+    "air_humidity": 70,
+    "co2_ppm": 750
+  },
+  "override_config": {
+    "inference": {
+      "confidence": {
+        "ood_zscore_threshold": -1.0
+      }
+    }
+  }
+}

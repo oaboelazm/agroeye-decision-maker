@@ -35,6 +35,10 @@ def create_app(config_path: str = "configs/base.yaml", safety_path: str = "confi
     def health() -> HealthResponse:
         return HealthResponse(status="ok", model_mode=runtime.mode)
 
+    @app.get("/health", response_model=HealthResponse)
+    def health_get() -> HealthResponse:
+        return HealthResponse(status="ok", model_mode=runtime.mode)
+
     return app
 
 

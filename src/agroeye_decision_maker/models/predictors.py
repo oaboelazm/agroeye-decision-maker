@@ -5,6 +5,7 @@ from typing import Any
 
 import joblib
 import numpy as np
+from sklearn.dummy import DummyRegressor
 
 from .common import make_regressor
 
@@ -28,6 +29,11 @@ def train_predictors(x_train: np.ndarray, y_train: dict[str, np.ndarray], cfg: d
     p_cfg = cfg["predictors"]
     models = {}
     for target, y in y_train.items():
+        y_arr = np.asarray(y, dtype=float)
+        mask = np.isfinite(y_arr)
+        if x_train.ndim == 2:
+            mask &= np.all(np.isfinite(x_train), axis=1)
+
         reg = make_regressor(
             model_type=str(p_cfg.get("model_type", "hist_gbrt")),
             max_depth=int(p_cfg.get("max_depth", 8)),
@@ -35,6 +41,11 @@ def train_predictors(x_train: np.ndarray, y_train: dict[str, np.ndarray], cfg: d
             max_iter=int(p_cfg.get("max_iter", 300)),
             random_state=seed,
         )
-        reg.fit(x_train, y)
+        if int(mask.sum()) < 20:
+            fallback = DummyRegressor(strategy="mean")
+            fallback.fit(x_train[:1], np.array([0.0]))
+            models[target] = fallback
+            continue
+        reg.fit(x_train[mask], y_arr[mask])
         models[target] = reg
     return PredictorBundle(models=models)
