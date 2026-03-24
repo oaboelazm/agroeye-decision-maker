@@ -2,6 +2,14 @@
 
 Production-ready ML controller for tomato greenhouse decision support using the local AGC 2019 dataset.
 
+### ESP32 Edge Module (Runs Locally on Hardware)
+
+This component is deployed and executed directly on the ESP32 device, enabling real-time processing and interaction with sensors without relying on the cloud.
+
+<a href="https://github.com/oaboelazm/agroeye-esp32-decision/">
+  <img src="https://img.shields.io/badge/View%20Project-agroeye--esp32--decision-blue?style=for-the-badge&logo=github">
+</a>
+
 ## 1. Setup
 ```bash
 python -m venv .venv
